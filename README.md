@@ -254,21 +254,29 @@ pytest tests/test_tools.py
 - [ ] Web API 接口
 - [ ] 插件系统
 - [ ] 单元测试覆盖
+- [ ] 由于跟踪打码效果还比较差，需要完整的验证流程
 
 ## 技术栈
 
 ### 核心依赖
 
-- **Google Gen AI SDK** (v0.3.0+): 官方统一的生成式 AI SDK
-- **Pydantic** (v2.9.0+): 数据验证和设置管理
-- **OpenCV** (v4.10.0+): 计算机视觉和视频处理
-- **FastAPI** (v0.115.0+): 现代 Python Web 框架 (用于未来 API)
+- **google-genai** (v0.3.0+): Google 官方统一的生成式 AI SDK
+- **opencv-python** (v4.10.0+): 计算机视觉和视频处理
+- **pillow** (v11.0.0+): 图像处理库
+- **numpy** (v2.0.0+): 数值计算库
+- **python-dotenv** (v1.0.0+): 环境变量管理
+- **pydantic** (v2.9.0+): 数据验证和设置管理
+- **pydantic-settings** (v2.6.0+): Pydantic 配置管理
+- **fastapi** (v0.115.0+): 现代 Python Web 框架 (用于未来 API)
+- **matplotlib** (v3.10.5+): 数据可视化库
 
 ### 开发工具
 
 - **uv**: 现代 Python 包管理器
-- **pytest**: 测试框架
-- **python-dotenv**: 环境变量管理
+- **pytest** (v7.4.0+): 测试框架
+- **pytest-asyncio** (v0.21.0+): 异步测试支持
+- **black** (v23.0.0+): 代码格式化工具
+- **ruff** (v0.1.0+): 代码检查和格式化工具
 
 ## 使用注意
 
