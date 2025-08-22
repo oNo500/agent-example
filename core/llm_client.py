@@ -82,9 +82,16 @@ class GeminiClient:
                 contents=contents
             )
             
-            # 打印LLM原始响应
+            # 打印LLM原始响应 - 完整格式化输出
             print(f"📤 LLM响应内容：")
-            print(response.text[:500] + "..." if len(response.text) > 500 else response.text)
+            try:
+                # 尝试解析为JSON并格式化输出
+                import json
+                json_content = json.loads(response.text)
+                print(json.dumps(json_content, indent=2, ensure_ascii=False))
+            except (json.JSONDecodeError, ValueError):
+                # 如果不是JSON格式，直接输出完整内容
+                print(response.text)
             
             # 解析响应
             regions = self._parse_detection_response(response.text)

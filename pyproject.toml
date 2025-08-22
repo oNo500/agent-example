@@ -8,13 +8,14 @@ description = "基于LLM+工具函数的视频处理Agent - 现代化升级版"
 requires-python = ">=3.12"
 dependencies = [
     "google-genai>=0.3.0",
-    "opencv-python>=4.10.0", 
+    "opencv-python>=4.10.0",
     "pillow>=11.0.0",
     "numpy>=2.0.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "fastapi>=0.115.0",
+    "matplotlib>=3.10.5",
 ]
 
 [tool.uv]

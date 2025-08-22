@@ -353,7 +353,8 @@ class VideoAgent:
             frames_info_str = self.tool_registry.execute_tool(
                 "extract_video_frames", 
                 video_path=video_path,
-                max_frames=15,
+                sample_rate=15,  # 降低采样率，每15帧提取一帧
+                max_frames=30,   # 增加关键帧数量，提高追踪精度
                 use_motion_detection=True,
                 single_best_frame=False
             )

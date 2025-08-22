@@ -1,6 +1,7 @@
 import cv2
 import os
 import numpy as np
+import logging
 from typing import List, Dict, Tuple, Optional
 import json
 from dataclasses import asdict
@@ -13,6 +14,12 @@ class VideoProcessor:
     
     def __init__(self):
         self.config = Config()
+        self.logger = logging.getLogger(__name__)
+        
+        # 验证相关属性
+        self.validation_enabled = False
+        self.validator = None
+        self.visualizer = None
     
     def extract_frames(
         self, 
@@ -82,14 +89,14 @@ class VideoProcessor:
                 
                 if should_extract:
                     timestamp = frame_count / fps
-                    frame_filename = f"frame_{extracted_count + 1}.jpg"
+                    frame_filename = f"frame_{frame_count + 1}.jpg"
                     frame_path = os.path.join(temp_dir, frame_filename)
                     
                     # 保存帧图片
                     cv2.imwrite(frame_path, frame)
                     
                     frame_info = FrameInfo(
-                        frame_id=extracted_count + 1,
+                        frame_id=frame_count + 1,  # 使用真实的视频帧号，不是提取序号
                         timestamp=timestamp,
                         image_path=frame_path,
                         width=width,
@@ -105,6 +112,15 @@ class VideoProcessor:
                 frame_count += 1
             
             cap.release()
+            
+            # 验证帧提取结果
+            if self.validation_enabled and self.validator:
+                validation_result = self.validator.validate_frame_extraction(
+                    video_path, frames, max_frames
+                )
+                if validation_result.status == "fail":
+                    self.logger.warning(f"帧提取验证失败: {validation_result.message}")
+            
             return frames
             
         except Exception as e:
@@ -192,6 +208,23 @@ class VideoProcessor:
         except Exception as e:
             raise VideoProcessingError(f"Mosaic application failed: {str(e)}") from e
     
+    def enable_validation(self, enable: bool = True, output_dir: str = "./output/validation"):
+        """启用/禁用验证模式
+        
+        Args:
+            enable: 是否启用验证
+            output_dir: 验证结果输出目录
+        """
+        self.validation_enabled = enable
+        if enable:
+            from utils.tracking_validator import TrackingValidator
+            from utils.visualization_helper import VisualizationHelper
+            self.validator = TrackingValidator(output_dir)
+            self.visualizer = VisualizationHelper(output_dir)
+        else:
+            self.validator = None
+            self.visualizer = None
+    
     def _group_regions_by_frame(self, regions: List[DetectionRegion]) -> Dict[int, List[DetectionRegion]]:
         """按帧ID分组区域"""
         frame_regions = {}
@@ -201,6 +234,68 @@ class VideoProcessor:
                 frame_regions[frame_id] = []
             frame_regions[frame_id].append(region)
         return frame_regions
+    
+    def _interpolate_regions_for_frame(
+        self,
+        current_frame_id: int,
+        frame_regions_map: Dict[int, List[DetectionRegion]],
+        sorted_frame_ids: List[int]
+    ) -> List[DetectionRegion]:
+        """为当前帧计算区域位置（使用最近关键帧+扩大区域的方案）
+        
+        Args:
+            current_frame_id: 当前帧ID
+            frame_regions_map: 关键帧区域映射
+            sorted_frame_ids: 排序的关键帧ID列表
+            
+        Returns:
+            当前帧应该使用的区域列表
+        """
+        # 如果当前帧就是关键帧，直接返回
+        if current_frame_id in frame_regions_map:
+            return frame_regions_map[current_frame_id]
+        
+        # 查找最近的关键帧
+        closest_frame_id = None
+        min_distance = float('inf')
+        
+        for frame_id in sorted_frame_ids:
+            distance = abs(frame_id - current_frame_id)
+            if distance < min_distance:
+                min_distance = distance
+                closest_frame_id = frame_id
+        
+        if closest_frame_id is None:
+            return []
+        
+        # 使用最近关键帧的区域，但扩大打码范围来容错
+        original_regions = frame_regions_map[closest_frame_id]
+        expanded_regions = []
+        
+        for region in original_regions:
+            x, y, w, h = region.bbox
+            
+            # 根据距离调整扩大比例，距离越远扩大越多
+            expansion_factor = 1.0 + (min_distance / 30.0) * 0.3  # 每30帧增加30%
+            expansion_factor = min(expansion_factor, 1.5)  # 最大扩大50%
+            
+            # 计算扩大后的区域
+            new_w = int(w * expansion_factor)
+            new_h = int(h * expansion_factor)
+            new_x = x - (new_w - w) // 2
+            new_y = y - (new_h - h) // 2
+            
+            # 创建扩大后的区域
+            expanded_region = DetectionRegion(
+                frame_id=current_frame_id,
+                object_type=region.object_type,
+                bbox=(new_x, new_y, new_w, new_h),
+                confidence=region.confidence * 0.8,  # 降低置信度表示不确定性
+                description=f"{region.description} (扩大追踪)"
+            )
+            expanded_regions.append(expanded_region)
+        
+        return expanded_regions
     
     def _frame_count_to_frame_id(self, frame_count: int, regions: List[DetectionRegion]) -> int:
         """将帧计数转换为帧ID"""
@@ -317,35 +412,52 @@ class VideoProcessor:
         mosaic_strength: int,
         total_frames: int
     ) -> None:
-        """使用追踪算法将单帧标注应用到整个视频
+        """使用追踪算法将关键帧检测结果插值到整个视频
         
         Args:
             cap: 视频捕获对象
             out: 视频写入对象
-            regions: 检测区域列表
+            regions: 关键帧检测区域列表
             mosaic_strength: 打码强度
             total_frames: 总帧数
         """
         frame_count = 0
         
-        # 简化版追踪：固定区域位置，适用于静止或缓慢移动的目标
+        # 按帧ID分组区域
+        frame_regions_map = self._group_regions_by_frame(regions)
+        sorted_frame_ids = sorted(frame_regions_map.keys())
+        
+        if not sorted_frame_ids:
+            # 没有检测区域，直接复制所有帧
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                out.write(frame)
+                frame_count += 1
+            return
+        
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # 对所有标注区域应用打码（简单的固定位置追踪）
-            for region in regions:
+            current_frame_id = frame_count + 1
+            
+            # 查找当前帧应该使用的区域（插值或直接使用）
+            target_regions = self._interpolate_regions_for_frame(
+                current_frame_id, frame_regions_map, sorted_frame_ids
+            )
+            
+            # 应用打码
+            for region in target_regions:
                 x, y, w, h = region.bbox
-                
-                # 添加一些位置变化的容错性（可选的简单追踪）
-                # 这里使用固定区域，实际项目中可以集成更复杂的追踪算法
                 frame = self._apply_mosaic_to_bbox(frame, (x, y, w, h), mosaic_strength)
             
             out.write(frame)
             frame_count += 1
             
-            # 进度显示（可选）
+            # 进度显示
             if frame_count % 100 == 0:
                 progress = (frame_count / total_frames) * 100
                 print(f"处理进度: {progress:.1f}% ({frame_count}/{total_frames})")
