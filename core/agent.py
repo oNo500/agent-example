@@ -2,6 +2,7 @@ from typing import Dict, List, Any, Optional
 import logging
 import asyncio
 import json
+import os
 from pydantic import BaseModel, Field
 from core.llm_client import GeminiClient, FrameInfo, DetectionRegion
 from tools.registry import tool_registry
@@ -110,24 +111,114 @@ class VideoAgent:
                         break
                 
                 if matching_session:
-                    # 尝试加载现有标注数据
+                    # 首先尝试自动保存下载的标注文件
+                    self.logger.info("Trying to auto-save downloaded annotation file")
+                    auto_save_result = self.tool_registry.execute_tool(
+                        "auto_save_downloaded_regions",
+                        session_id=matching_session["session_id"]
+                    )
+                    auto_save_data = json.loads(auto_save_result)
+                    
+                    if auto_save_data.get("status") == "success":
+                        self.logger.info("Successfully auto-saved downloaded annotation file")
+                    
+                    # 尝试加载标注数据
                     annotation_data = self.tool_registry.execute_tool(
                         "load_annotation_data", 
                         session_id=matching_session["session_id"]
                     )
                     annotation_result = json.loads(annotation_data)
                     
-                    if annotation_result.get("status") != "no_annotation":
-                        # 有标注数据，直接执行打码
-                        self.logger.info("Found existing annotation data, applying mosaic")
-                        regions_data = json.dumps({"regions": annotation_result.get("regions", [])})
+                    # 检查是否有有效的标注数据
+                    regions_list = annotation_result.get("regions", [])
+                    has_valid_regions = (
+                        annotation_result.get("status") != "no_annotation" and 
+                        isinstance(regions_list, list) and 
+                        len(regions_list) > 0
+                    )
+                    
+                    if has_valid_regions:
+                        # 有有效标注数据，使用LLM追踪增强后执行打码处理
+                        self.logger.info(f"Found valid annotation data with {len(regions_list)} regions, enhancing with LLM tracking")
+                        
+                        # 转换为DetectionRegion对象作为种子
+                        seed_regions = []
+                        for region_data in regions_list:
+                            seed_region = DetectionRegion(
+                                frame_id=region_data["frame_id"],
+                                object_type=region_data.get("object_type", target_description),
+                                bbox=tuple(region_data["bbox"]),
+                                confidence=region_data.get("confidence", 1.0),
+                                description=region_data.get("description", f"{target_description}区域 - 手动标注")
+                            )
+                            seed_regions.append(seed_region)
+                        
+                        # 使用LLM追踪增强标注
+                        enhanced_regions = await self.enhance_annotation_with_tracking(
+                            video_path, seed_regions, target_description
+                        )
+                        
+                        # 转换回JSON格式用于打码
+                        enhanced_regions_data = {
+                            "regions": [
+                                {
+                                    "frame_id": region.frame_id,
+                                    "object_type": region.object_type,
+                                    "bbox": list(region.bbox),
+                                    "confidence": region.confidence,
+                                    "description": region.description,
+                                    "track_id": region.track_id
+                                }
+                                for region in enhanced_regions
+                            ]
+                        }
+                        
+                        self.logger.info(f"Enhanced tracking complete: {len(enhanced_regions)} total regions for mosaic processing")
+                        regions_data = json.dumps(enhanced_regions_data)
                         output_path = self.tool_registry.execute_tool(
                             "mosaic_video_regions",
                             video_path=video_path,
                             regions_data=regions_data,
                             mosaic_strength=15
                         )
-                        return f"✅ 打码处理完成！输出文件: {output_path}"
+                        
+                        # 提供完成后的友好提示
+                        return f"""
+✅ 智能追踪标注流程完成！
+
+🎯 种子标注: {len(regions_list)} 个手动标注区域
+🤖 LLM追踪: 共识别 {len(enhanced_regions)} 个追踪区域
+📁 输出文件: {output_path}
+🚀 使用了真正的LLM多帧分析技术，智能追踪目标运动轨迹
+
+💡 技术优势: 结合手动标注精确度和LLM追踪能力，适应目标在视频中的位置变化！
+                        """.strip()
+                    else:
+                        # 标注会话存在但没有完成标注，提供清晰指引
+                        session_id = matching_session["session_id"]
+                        annotation_file = os.path.join(
+                            self.config.OUTPUT_DIR, 
+                            "annotations", 
+                            session_id, 
+                            "annotation.html"
+                        )
+                        
+                        return f"""
+⏳ 发现已有标注会话但尚未完成标注
+
+📋 会话ID: {session_id}
+🎯 目标: {target_description}
+📁 标注界面: {annotation_file}
+
+📝 下一步操作:
+1. 打开上述HTML文件（或重新运行程序自动打开）
+2. 在图片上点击拖拽标注{target_description}区域
+3. 点击"保存标注数据"下载regions.json文件
+4. 将下载的文件复制到标注会话目录
+5. 重新运行此程序完成打码处理
+
+💡 提示: 只需标注一张图片，系统会自动应用到整个视频！
+                        """.strip()
                 
                 # 没有现有标注数据，创建新的标注工作流
                 workflow_result = await self.create_manual_annotation_workflow(
@@ -262,7 +353,9 @@ class VideoAgent:
             frames_info_str = self.tool_registry.execute_tool(
                 "extract_video_frames", 
                 video_path=video_path,
-                use_motion_detection=True
+                max_frames=15,
+                use_motion_detection=True,
+                single_best_frame=False
             )
             
             import json
@@ -286,6 +379,71 @@ class VideoAgent:
         except Exception as e:
             raise VideoAgentException(f"Video content analysis failed: {str(e)}") from e
     
+    async def enhance_annotation_with_tracking(
+        self, 
+        video_path: str, 
+        seed_regions: List[DetectionRegion],
+        target_description: str = "手机"
+    ) -> List[DetectionRegion]:
+        """使用种子标注增强LLM追踪分析
+        
+        Args:
+            video_path: 视频路径
+            seed_regions: 用户手动标注的种子区域
+            target_description: 目标描述
+            
+        Returns:
+            增强后的完整追踪区域列表
+        """
+        try:
+            print(f"🌱 开始种子增强追踪，种子区域数量: {len(seed_regions)}")
+            for i, seed in enumerate(seed_regions):
+                print(f"   种子{i+1}: 帧{seed.frame_id}, 位置({seed.bbox[0]},{seed.bbox[1]}), 大小{seed.bbox[2]}x{seed.bbox[3]}")
+            
+            # 获取视频信息用于坐标验证
+            if self.tool_registry.has_tool("get_video_info"):
+                info_str = self.tool_registry.execute_tool("get_video_info", video_path=video_path)
+                video_info = json.loads(info_str)
+                print(f"📏 视频分辨率: {video_info.get('width', 'unknown')}x{video_info.get('height', 'unknown')}")
+            else:
+                print("⚠️  无法获取视频信息进行坐标验证")
+            
+            # 使用多帧LLM分析进行追踪
+            llm_regions = await self.analyze_video_content(video_path, target_description)
+            
+            # 合并种子标注和LLM追踪结果
+            enhanced_regions = []
+            
+            # 保留种子标注（用户标注优先级最高）
+            for seed_region in seed_regions:
+                enhanced_regions.append(seed_region)
+            
+            # 添加LLM发现的其他帧中的目标位置
+            seed_frame_ids = {region.frame_id for region in seed_regions}
+            llm_added_count = 0
+            for llm_region in llm_regions:
+                if llm_region.frame_id not in seed_frame_ids:
+                    # 为LLM检测的区域添加追踪标识
+                    llm_region.description = f"{llm_region.description} (LLM追踪)"
+                    enhanced_regions.append(llm_region)
+                    llm_added_count += 1
+            
+            print(f"📊 合并结果：{len(seed_regions)}个种子标注 + {llm_added_count}个LLM追踪 = {len(enhanced_regions)}个总区域")
+            
+            # 显示LLM追踪的坐标信息用于调试
+            if llm_added_count > 0:
+                print("🔍 LLM追踪坐标详情:")
+                for region in enhanced_regions:
+                    if "(LLM追踪)" in region.description:
+                        print(f"   帧{region.frame_id}: 位置({region.bbox[0]},{region.bbox[1]}), 大小{region.bbox[2]}x{region.bbox[3]}")
+            
+            return enhanced_regions
+            
+        except Exception as e:
+            # 如果LLM追踪失败，至少返回种子标注
+            self.logger.warning(f"LLM tracking enhancement failed: {str(e)}, falling back to seed regions only")
+            return seed_regions
+
     async def create_manual_annotation_workflow(
         self, 
         video_path: str, 

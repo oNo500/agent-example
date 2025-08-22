@@ -12,7 +12,8 @@ from config import Config
 def create_annotation_session(
     video_path: str,
     frames_info: str,
-    session_name: str = None
+    session_name: str = None,
+    video_info: dict = None
 ) -> str:
     """创建标注会话，生成可视化标注界面
     
@@ -20,6 +21,7 @@ def create_annotation_session(
         video_path: 视频文件路径
         frames_info: 提取的帧信息JSON字符串
         session_name: 会话名称，默认使用视频文件名
+        video_info: 视频信息字典，包含分辨率等信息
         
     Returns:
         标注会话信息JSON字符串
@@ -52,6 +54,7 @@ def create_annotation_session(
             "video_path": video_path,
             "frames": frames,
             "annotation_dir": annotation_dir,
+            "video_info": video_info or {},
             "status": "created",
             "created_at": str(pd.Timestamp.now()) if 'pd' in globals() else "unknown"
         }
@@ -168,6 +171,10 @@ def _generate_annotation_html(session_info: Dict) -> str:
     frames = session_info["frames"]
     session_id = session_info["session_id"]
     
+    # 先生成帧HTML和初始化JS
+    frames_html = _generate_frames_html(frames, session_info)
+    frame_init_js = _generate_frame_init_js(frames)
+    
     html_template = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -213,6 +220,18 @@ def _generate_annotation_html(session_info: Dict) -> str:
             border: 3px solid #ff4444;
             background: rgba(255, 68, 68, 0.2);
             cursor: move;
+            user-select: none;
+            transition: all 0.1s ease;
+        }}
+        .annotation-box:hover {{
+            border-color: #cc0000;
+            background: rgba(255, 68, 68, 0.3);
+        }}
+        #temp-box {{
+            border-color: #00ff00 !important;
+            background: rgba(0, 255, 0, 0.1) !important;
+            pointer-events: none;
+            z-index: 1000;
         }}
         .controls {{
             margin: 20px 0;
@@ -249,12 +268,13 @@ def _generate_annotation_html(session_info: Dict) -> str:
 </head>
 <body>
     <div class="container">
-        <h1>视频标注工具</h1>
+        <h1>智能追踪视频标注工具</h1>
         <div class="controls">
-            <h3>标注说明</h3>
-            <p>1. 在每个关键帧上点击并拖拽来标注手机位置</p>
-            <p>2. 可以为每个帧标注多个区域</p>
-            <p>3. 完成标注后点击"保存标注数据"</p>
+            <h3>标注说明（智能追踪版）</h3>
+            <p><strong>视频信息:</strong> {session_info.get("video_info", {}).get("resolution", "未知")} | 时长: {session_info.get("video_info", {}).get("duration", "未知")}s</p>
+            <p>1. 在下方图片上点击并拖拽来标注目标区域（种子标注）</p>
+            <p>2. 可以标注多个区域，完成后点击"保存标注数据"</p>
+            <p>3. 系统会使用LLM智能追踪应用到整个视频</p>
             
             <button class="btn btn-success" onclick="saveAnnotations()">保存标注数据</button>
             <button class="btn btn-warning" onclick="clearAnnotations()">清除所有标注</button>
@@ -262,7 +282,7 @@ def _generate_annotation_html(session_info: Dict) -> str:
         </div>
 
         <div id="frames-container">
-            {_generate_frames_html(frames)}
+            {frames_html}
         </div>
 
         <div class="regions-list">
@@ -276,36 +296,50 @@ def _generate_annotation_html(session_info: Dict) -> str:
         let currentFrameId = null;
         let isDrawing = false;
         let startX, startY;
+        let tempRectangle = null;
 
         function initializeFrameAnnotation(frameId) {{
             const canvas = document.getElementById('frame-' + frameId);
             const container = canvas.parentElement;
             
+            // 创建一个持久的临时矩形元素
+            createPersistentTempRectangle(container);
+            
             canvas.addEventListener('mousedown', startDrawing);
             canvas.addEventListener('mousemove', drawRectangle);
             canvas.addEventListener('mouseup', endDrawing);
+            canvas.addEventListener('mouseleave', cancelDrawing);
+            
+            // 改善用户体验的样式
+            canvas.style.cursor = 'crosshair';
             
             function startDrawing(e) {{
+                e.preventDefault();
                 isDrawing = true;
                 currentFrameId = frameId;
                 const rect = canvas.getBoundingClientRect();
                 startX = e.clientX - rect.left;
                 startY = e.clientY - rect.top;
+                
+                // 显示临时矩形
+                showTempRectangle(container);
             }}
             
             function drawRectangle(e) {{
                 if (!isDrawing) return;
+                e.preventDefault();
                 
                 const rect = canvas.getBoundingClientRect();
                 const currentX = e.clientX - rect.left;
                 const currentY = e.clientY - rect.top;
                 
-                // 更新临时矩形显示
-                updateTempRectangle(container, startX, startY, currentX, currentY);
+                // 优化的矩形更新 - 只更新CSS属性
+                updateTempRectanglePosition(container, startX, startY, currentX, currentY);
             }}
             
             function endDrawing(e) {{
                 if (!isDrawing) return;
+                e.preventDefault();
                 isDrawing = false;
                 
                 const rect = canvas.getBoundingClientRect();
@@ -314,7 +348,14 @@ def _generate_annotation_html(session_info: Dict) -> str:
                 
                 // 创建标注区域
                 createAnnotation(frameId, startX, startY, endX, endY, canvas);
-                removeTempRectangle(container);
+                hideTempRectangle(container);
+            }}
+            
+            function cancelDrawing(e) {{
+                if (isDrawing) {{
+                    isDrawing = false;
+                    hideTempRectangle(container);
+                }}
             }}
         }}
         
@@ -327,8 +368,10 @@ def _generate_annotation_html(session_info: Dict) -> str:
             if (width < 10 || height < 10) return; // 忽略太小的区域
             
             // 转换为视频坐标（相对于原始视频尺寸）
-            const scaleX = 1920 / canvas.offsetWidth;
-            const scaleY = 1080 / canvas.offsetHeight;
+            const videoWidth = {session_info.get("video_info", {}).get("width", 1920)};
+            const videoHeight = {session_info.get("video_info", {}).get("height", 1080)};
+            const scaleX = videoWidth / canvas.offsetWidth;
+            const scaleY = videoHeight / canvas.offsetHeight;
             
             const annotation = {{
                 frame_id: frameId,
@@ -369,29 +412,45 @@ def _generate_annotation_html(session_info: Dict) -> str:
             updateRegionsDisplay();
         }}
         
-        function updateTempRectangle(container, x1, y1, x2, y2) {{
-            removeTempRectangle(container);
+        function createPersistentTempRectangle(container) {{
+            if (tempRectangle) return; // 避免重复创建
+            
+            tempRectangle = document.createElement('div');
+            tempRectangle.className = 'annotation-box';
+            tempRectangle.id = 'temp-box';
+            tempRectangle.style.borderColor = '#00ff00';
+            tempRectangle.style.background = 'rgba(0, 255, 0, 0.1)';
+            tempRectangle.style.display = 'none';
+            tempRectangle.style.pointerEvents = 'none'; // 防止鼠标事件干扰
+            
+            container.appendChild(tempRectangle);
+        }}
+        
+        function showTempRectangle(container) {{
+            if (tempRectangle) {{
+                tempRectangle.style.display = 'block';
+            }}
+        }}
+        
+        function hideTempRectangle(container) {{
+            if (tempRectangle) {{
+                tempRectangle.style.display = 'none';
+            }}
+        }}
+        
+        function updateTempRectanglePosition(container, x1, y1, x2, y2) {{
+            if (!tempRectangle) return;
             
             const x = Math.min(x1, x2);
             const y = Math.min(y1, y2);
             const width = Math.abs(x2 - x1);
             const height = Math.abs(y2 - y1);
             
-            const tempBox = document.createElement('div');
-            tempBox.className = 'annotation-box';
-            tempBox.id = 'temp-box';
-            tempBox.style.left = x + 'px';
-            tempBox.style.top = y + 'px';
-            tempBox.style.width = width + 'px';
-            tempBox.style.height = height + 'px';
-            tempBox.style.borderColor = '#00ff00';
-            
-            container.appendChild(tempBox);
-        }}
-        
-        function removeTempRectangle(container) {{
-            const tempBox = container.querySelector('#temp-box');
-            if (tempBox) tempBox.remove();
+            // 只更新CSS属性，避免DOM重建
+            tempRectangle.style.left = x + 'px';
+            tempRectangle.style.top = y + 'px';
+            tempRectangle.style.width = width + 'px';
+            tempRectangle.style.height = height + 'px';
         }}
         
         function updateRegionsDisplay() {{
@@ -412,12 +471,17 @@ def _generate_annotation_html(session_info: Dict) -> str:
         }}
         
         function saveAnnotations() {{
+            if (annotations.length === 0) {{
+                alert('请先标注至少一个区域！');
+                return;
+            }}
+            
             const data = {{
                 session_id: "{session_id}",
                 regions: annotations
             }};
             
-            // 这里需要实现保存逻辑，可以通过表单提交或者AJAX
+            // 自动下载标注文件
             const blob = new Blob([JSON.stringify(data, null, 2)], {{type: 'application/json'}});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -426,7 +490,19 @@ def _generate_annotation_html(session_info: Dict) -> str:
             a.click();
             URL.revokeObjectURL(url);
             
-            alert('标注数据已导出！请将regions.json文件放在标注会话目录中。');
+            // 提供清晰的下一步指示
+            alert(`✅ 标注完成！共标注了 ${{annotations.length}} 个区域。
+            
+📁 regions.json 文件已下载到您的下载文件夹
+📋 请将该文件复制到标注会话目录中
+🎯 然后重新运行程序，系统将自动应用打码到整个视频
+            
+💡 提示：您也可以直接重新运行 python examples/annotation_demo.py`);
+            
+            // 自动复制会话ID到剪贴板（如果浏览器支持）
+            if (navigator.clipboard) {{
+                navigator.clipboard.writeText("{session_id}");
+            }}
         }}
         
         function clearAnnotations() {{
@@ -447,7 +523,7 @@ def _generate_annotation_html(session_info: Dict) -> str:
         
         // 初始化所有帧的标注功能
         window.onload = function() {{
-            {_generate_frame_init_js(frames)}
+            {frame_init_js}
         }};
     </script>
 </body>
@@ -457,22 +533,27 @@ def _generate_annotation_html(session_info: Dict) -> str:
     return html_template
 
 
-def _generate_frames_html(frames: List[Dict]) -> str:
-    """生成帧HTML"""
+def _generate_frames_html(frames: List[Dict], session_info: Dict) -> str:
+    """生成帧HTML，优化单帧显示"""
     html_parts = []
     
-    for frame in frames:
+    for i, frame in enumerate(frames):
         frame_id = frame["frame_id"]
         image_path = frame["image_path"]
         timestamp = frame["timestamp"]
         
-        # 转换为相对路径用于HTML显示
-        relative_path = os.path.relpath(image_path)
+        # 转换为相对路径用于HTML显示（相对于HTML文件位置）
+        html_dir = session_info["annotation_dir"]
+        relative_path = os.path.relpath(image_path, html_dir)
+        
+        # 如果是单帧模式，优化显示
+        frame_title = "最佳关键帧" if len(frames) == 1 else f"帧 {frame_id}"
         
         html_parts.append(f"""
         <div class="frame-container">
             <div class="frame-header">
-                <strong>帧 {frame_id}</strong> - 时间: {timestamp:.2f}s
+                <strong>{frame_title}</strong> - 时间: {timestamp:.2f}s
+                {' <span style="color: #28a745;">（点击并拖拽标注目标区域）</span>' if len(frames) == 1 else ''}
             </div>
             <div style="position: relative;">
                 <img id="frame-{frame_id}" src="{relative_path}" class="frame-canvas" />
@@ -491,6 +572,73 @@ def _generate_frame_init_js(frames: List[Dict]) -> str:
         js_parts.append(f"initializeFrameAnnotation({frame_id});")
     
     return "\n            ".join(js_parts)
+
+
+@tool_registry.register
+def auto_save_downloaded_regions(
+    session_id: str,
+    download_path: str = None
+) -> str:
+    """自动保存下载的标注数据到正确位置
+    
+    Args:
+        session_id: 标注会话ID
+        download_path: 下载文件路径，默认在用户下载文件夹查找
+        
+    Returns:
+        操作结果JSON字符串
+    """
+    try:
+        import os
+        import shutil
+        from pathlib import Path
+        
+        config = Config()
+        annotation_dir = os.path.join(config.OUTPUT_DIR, "annotations", session_id)
+        target_path = os.path.join(annotation_dir, "regions.json")
+        
+        # 如果没有指定下载路径，尝试在常见下载目录查找
+        if not download_path:
+            common_download_dirs = [
+                os.path.expanduser("~/Downloads"),
+                os.path.expanduser("~/下载"),
+                os.path.expanduser("~/Desktop")
+            ]
+            
+            for download_dir in common_download_dirs:
+                potential_file = os.path.join(download_dir, "regions.json")
+                if os.path.exists(potential_file):
+                    download_path = potential_file
+                    break
+        
+        if not download_path or not os.path.exists(download_path):
+            return json.dumps({
+                "status": "not_found",
+                "message": "未找到下载的regions.json文件，请手动复制到标注目录",
+                "target_directory": annotation_dir
+            }, ensure_ascii=False)
+        
+        # 复制文件到目标位置
+        shutil.copy2(download_path, target_path)
+        
+        # 删除下载文件夹中的原文件
+        try:
+            os.remove(download_path)
+        except:
+            pass  # 删除失败不影响主流程
+        
+        return json.dumps({
+            "status": "success", 
+            "message": "标注数据已自动保存到正确位置",
+            "target_path": target_path
+        }, ensure_ascii=False)
+        
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "message": f"自动保存失败: {str(e)}",
+            "manual_instruction": f"请手动将regions.json复制到: {annotation_dir}"
+        }, ensure_ascii=False)
 
 
 @tool_registry.register

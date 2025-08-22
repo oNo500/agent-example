@@ -12,16 +12,18 @@ video_processor = VideoProcessor()
 def extract_video_frames(
     video_path: str,
     sample_rate: int = 30,
-    max_frames: int = 20,
-    use_motion_detection: bool = True
+    max_frames: int = 1,
+    use_motion_detection: bool = True,
+    single_best_frame: bool = True
 ) -> str:
-    """提取视频关键帧供LLM分析
+    """提取视频关键帧供标注分析
     
     Args:
         video_path: 视频文件的完整路径
         sample_rate: 采样率，每N帧提取一帧
-        max_frames: 最大提取帧数，防止视频过长
+        max_frames: 最大提取帧数，默认1个用于简化标注
         use_motion_detection: 是否使用运动检测优化帧选择
+        single_best_frame: 是否只提取最佳单帧，默认true用于简化标注流程
         
     Returns:
         JSON字符串，包含提取的帧信息
@@ -64,18 +66,19 @@ def mosaic_video_regions(
     try:
         # 验证输入参数
         if not regions_data or regions_data.strip() == "":
-            return json.dumps({
-                "status": "skipped",
-                "message": "No regions data provided. Manual annotation required.",
-                "suggestion": "Use the annotation tool to mark phone locations in the extracted frames."
-            }, ensure_ascii=False)
+            raise VideoProcessingError("No regions data provided. Please complete manual annotation first.")
         
         # 解析区域数据
         regions_dict = json.loads(regions_data)
+        regions_list = regions_dict.get("regions", [])
+        
+        # 验证区域数据不为空
+        if not regions_list or len(regions_list) == 0:
+            raise VideoProcessingError("No regions provided for mosaic processing")
         
         # 转换为DetectionRegion对象
         regions = []
-        for region_data in regions_dict.get("regions", []):
+        for region_data in regions_list:
             region = DetectionRegion(
                 frame_id=region_data["frame_id"],
                 object_type=region_data.get("object_type", "unknown"),
@@ -194,34 +197,39 @@ def create_annotation_workflow(
     video_path: str,
     target_description: str = "手机",
     sample_rate: int = 30,
-    max_frames: int = 20
+    max_frames: int = 1
 ) -> str:
-    """创建完整的标注工作流，包含帧提取和标注界面生成
+    """创建简化的单帧标注工作流，包含最佳帧提取和标注界面生成
     
     Args:
         video_path: 视频文件路径
         target_description: 目标物体描述
         sample_rate: 采样率
-        max_frames: 最大帧数
+        max_frames: 最大帧数，默认1个用于简化标注
         
     Returns:
         工作流结果JSON，包含标注界面路径和使用说明
     """
     try:
-        # 1. 提取关键帧
+        # 1. 提取最佳关键帧（默认单帧模式）
         frames_info = extract_video_frames(
             video_path=video_path,
             sample_rate=sample_rate,
             max_frames=max_frames,
-            use_motion_detection=True
+            use_motion_detection=True,
+            single_best_frame=True
         )
         
-        # 2. 创建标注会话
+        # 2. 获取视频信息用于正确的坐标转换
+        video_info = video_processor.get_video_info(video_path)
+        
+        # 3. 创建标注会话
         from tools.annotation_tools import create_annotation_session
         session_info = create_annotation_session(
             video_path=video_path,
             frames_info=frames_info,
-            session_name=f"{target_description}_annotation"
+            session_name=f"{target_description}_annotation",
+            video_info=video_info
         )
         
         session_data = json.loads(session_info)
@@ -238,23 +246,22 @@ def create_annotation_workflow(
             "target_description": target_description,
             "browser_opened": session_data.get("browser_opened", False),
             "message": f"""
-🎯 {target_description}标注工作流已创建！
+🎯 {target_description}智能追踪标注工作流已创建！
 
 {browser_status}
-📊 已提取 {len(frames_data['frames'])} 个关键帧
+📊 已提取最佳关键帧用于标注
 
-📋 操作步骤:
-  1. 在浏览器标注界面中拖拽选择{target_description}区域
-  2. 可以为每个关键帧标注多个区域
-  3. 完成后点击'保存标注数据'下载regions.json
-  4. 重新运行处理程序，系统会自动加载标注数据进行打码
+📋 智能追踪操作步骤:
+  1. 在浏览器中标注界面只需标注一个{target_description}区域
+  2. 完成后点击'保存标注数据'下载regions.json
+  3. 重新运行处理程序，系统会使用LLM智能追踪到整个视频
 
-💡 下次处理提示: 完成标注后，重新输入相同的视频路径和需求即可自动应用打码
+💡 技术优势: 只需标注一帧，LLM会分析多帧追踪目标运动，适应位置变化！
             """.strip(),
             "manual_next_steps": [
-                "完成浏览器中的手动标注",
+                "在单张图片上完成标注",
                 "保存并下载regions.json文件", 
-                "重新运行程序进行打码处理"
+                "重新运行程序，LLM会智能追踪到整个视频"
             ]
         }
         

@@ -152,3 +152,7 @@ This is a **design and planning phase** project. The current repository contains
 5. **Testing Framework**: Comprehensive test coverage
 6. **API Layer**: FastAPI service for HTTP access
 7. **Plugin System**: Extensible tool loading mechanism
+
+## 注意
+
+- 使用 uv 管理项目依赖和环境，必要时看一下 README.md 中的快速开始部分。

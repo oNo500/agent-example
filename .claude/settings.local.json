@@ -6,7 +6,9 @@
       "mcp__Context7__resolve-library-id",
       "mcp__Context7__get-library-docs",
       "Bash(python:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(uv run:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

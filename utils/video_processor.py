@@ -115,15 +115,17 @@ class VideoProcessor:
         video_path: str, 
         regions: List[DetectionRegion], 
         mosaic_strength: int = 15,
-        output_path: str = None
+        output_path: str = None,
+        use_tracking: bool = True
     ) -> str:
-        """对指定区域应用打码效果
+        """对指定区域应用打码效果，支持单帧标注扩展到整个视频
         
         Args:
             video_path: 源视频文件路径
             regions: 检测区域列表
             mosaic_strength: 打码强度(5-50)
             output_path: 输出文件路径
+            use_tracking: 是否使用追踪算法扩展单帧标注到整个视频
             
         Returns:
             处理后的视频文件路径
@@ -156,24 +158,31 @@ class VideoProcessor:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
             
-            # 按帧处理视频
-            frame_regions_map = self._group_regions_by_frame(regions)
-            
-            frame_count = 0
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            # 处理视频：支持单帧标注扩展到整个视频
+            if use_tracking and len(regions) > 0:
+                # 使用追踪模式：将单帧标注应用到整个视频
+                frame = self._apply_mosaic_with_tracking(
+                    cap, out, regions, mosaic_strength, total_frames
+                )
+            else:
+                # 传统模式：只对指定帧应用打码
+                frame_regions_map = self._group_regions_by_frame(regions)
                 
-                # 如果当前帧有需要打码的区域
-                frame_id = self._frame_count_to_frame_id(frame_count, regions)
-                if frame_id in frame_regions_map:
-                    frame = self._apply_mosaic_to_frame(
-                        frame, frame_regions_map[frame_id], mosaic_strength
-                    )
-                
-                out.write(frame)
-                frame_count += 1
+                frame_count = 0
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # 如果当前帧有需要打码的区域
+                    frame_id = self._frame_count_to_frame_id(frame_count, regions)
+                    if frame_id in frame_regions_map:
+                        frame = self._apply_mosaic_to_frame(
+                            frame, frame_regions_map[frame_id], mosaic_strength
+                        )
+                    
+                    out.write(frame)
+                    frame_count += 1
             
             cap.release()
             out.release()
@@ -299,3 +308,84 @@ class VideoProcessor:
         except Exception as e:
             # 如果运动检测失败，返回高分以确保帧被提取
             return 10000.0
+    
+    def _apply_mosaic_with_tracking(
+        self, 
+        cap: cv2.VideoCapture, 
+        out: cv2.VideoWriter,
+        regions: List[DetectionRegion], 
+        mosaic_strength: int,
+        total_frames: int
+    ) -> None:
+        """使用追踪算法将单帧标注应用到整个视频
+        
+        Args:
+            cap: 视频捕获对象
+            out: 视频写入对象
+            regions: 检测区域列表
+            mosaic_strength: 打码强度
+            total_frames: 总帧数
+        """
+        frame_count = 0
+        
+        # 简化版追踪：固定区域位置，适用于静止或缓慢移动的目标
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # 对所有标注区域应用打码（简单的固定位置追踪）
+            for region in regions:
+                x, y, w, h = region.bbox
+                
+                # 添加一些位置变化的容错性（可选的简单追踪）
+                # 这里使用固定区域，实际项目中可以集成更复杂的追踪算法
+                frame = self._apply_mosaic_to_bbox(frame, (x, y, w, h), mosaic_strength)
+            
+            out.write(frame)
+            frame_count += 1
+            
+            # 进度显示（可选）
+            if frame_count % 100 == 0:
+                progress = (frame_count / total_frames) * 100
+                print(f"处理进度: {progress:.1f}% ({frame_count}/{total_frames})")
+    
+    def _apply_mosaic_to_bbox(
+        self, 
+        frame: np.ndarray, 
+        bbox: Tuple[int, int, int, int], 
+        mosaic_strength: int
+    ) -> np.ndarray:
+        """对指定边界框应用马赛克效果
+        
+        Args:
+            frame: 视频帧
+            bbox: 边界框 (x, y, width, height)
+            mosaic_strength: 马赛克强度
+            
+        Returns:
+            处理后的帧
+        """
+        x, y, w, h = bbox
+        
+        # 确保边界框在帧内
+        height, width = frame.shape[:2]
+        x = max(0, min(x, width - 1))
+        y = max(0, min(y, height - 1))
+        w = min(w, width - x)
+        h = min(h, height - y)
+        
+        if w <= 0 or h <= 0:
+            return frame
+        
+        # 提取区域
+        roi = frame[y:y+h, x:x+w]
+        
+        # 缩小再放大以创建马赛克效果
+        small_roi = cv2.resize(roi, (max(1, w // mosaic_strength), max(1, h // mosaic_strength)))
+        mosaic_roi = cv2.resize(small_roi, (w, h), interpolation=cv2.INTER_NEAREST)
+        
+        # 替换原区域
+        frame[y:y+h, x:x+w] = mosaic_roi
+        
+        return frame

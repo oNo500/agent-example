@@ -62,21 +62,34 @@ class GeminiClient:
             contents = [prompt]
             for frame in frames:
                 try:
-                    contents.append(types.File(
-                        file=frame.image_path,
-                        mime_type='image/jpeg'
-                    ))
+                    # 直接使用文件路径
+                    import base64
+                    with open(frame.image_path, 'rb') as f:
+                        image_data = base64.b64encode(f.read()).decode()
+                    contents.append({
+                        "inline_data": {
+                            "mime_type": "image/jpeg", 
+                            "data": image_data
+                        }
+                    })
                 except Exception as e:
                     raise LLMAnalysisError(f"Failed to load frame {frame.frame_id}: {str(e)}")
             
             # 调用Google Gen AI API
+            print(f"🤖 正在分析 {len(frames)} 帧视频内容...")
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=contents
             )
             
+            # 打印LLM原始响应
+            print(f"📤 LLM响应内容：")
+            print(response.text[:500] + "..." if len(response.text) > 500 else response.text)
+            
             # 解析响应
-            return self._parse_detection_response(response.text)
+            regions = self._parse_detection_response(response.text)
+            print(f"✅ LLM分析完成，检测到 {len(regions)} 个目标区域")
+            return regions
             
         except Exception as e:
             raise LLMAnalysisError(f"Video frame analysis failed: {str(e)}") from e
