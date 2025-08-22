@@ -19,24 +19,14 @@
 
 ### 安装依赖
 
-使用 uv (推荐):
+使用 uv 管理项目依赖:
 
 ```bash
-# 安装uv
+# 安装uv (如果未安装)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 初始化项目
+# 安装项目依赖
 uv sync
-
-# 激活虚拟环境
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-```
-
-或使用传统方式:
-
-```bash
-pip install -r requirements.txt
 ```
 
 ### 配置环境
@@ -55,13 +45,13 @@ GEMINI_API_KEY=your_api_key_here
 
 ```bash
 # 基本用法
-python main.py --video path/to/video.mp4 --request "对视频中的手机进行打码"
+uv run python main.py --video path/to/video.mp4 --request "对视频中的手机进行打码"
 
 # 交互模式
-python main.py --interactive
+uv run python main.py --interactive
 
 # 列出可用工具
-python main.py --list-tools
+uv run python main.py --list-tools
 ```
 
 #### 编程方式
@@ -144,19 +134,19 @@ def my_custom_tool(param1: str, param2: int = 10) -> str:
 ### 视频打码
 
 ```bash
-python main.py --video demo.mp4 --request "对视频中的手机进行打码"
+uv run python main.py --video demo.mp4 --request "对视频中的手机进行打码"
 ```
 
 ### 人脸模糊
 
 ```bash
-python main.py --video demo.mp4 --request "对视频中的人脸进行马赛克处理"
+uv run python main.py --video demo.mp4 --request "对视频中的人脸进行马赛克处理"
 ```
 
 ### 交互模式
 
 ```bash
-python main.py --interactive
+uv run python main.py --interactive
 ```
 
 ## 演示程序
@@ -164,7 +154,7 @@ python main.py --interactive
 运行演示程序了解功能:
 
 ```bash
-python examples/demo.py
+uv run python examples/demo.py
 ```
 
 演示内容包括:
@@ -198,7 +188,9 @@ pytest tests/test_tools.py
 
 ## 开发状态
 
-这是一个 MVP 版本，当前实现了:
+这是一个 **MVP 开发项目**，专注于核心功能实现，**不用于打包发布**。
+
+当前实现了:
 
 ✅ 核心架构和工具注册系统  
 ✅ 基础视频处理工具  
@@ -208,6 +200,13 @@ pytest tests/test_tools.py
 计划中的功能:
 
 - [ ] 更多视频处理效果
-- [ ] 性能优化和追踪
+- [ ] 性能优化和追踪  
 - [ ] Web API 接口
 - [ ] 插件系统
+
+## 使用注意
+
+- 项目仅用于开发和学习，不进行打包分发
+- 依赖通过 `pyproject.toml` 管理，使用 uv 工具
+- 所有运行命令都使用 `uv run` 前缀
+- 需要配置 Gemini API 密钥才能正常运行

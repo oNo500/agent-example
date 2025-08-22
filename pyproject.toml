@@ -1,29 +1,25 @@
+# Video Agent MVP - 项目依赖配置
+# 这是一个开发项目，不需要打包发布
+
 [project]
 name = "video-agent-mvp"
 version = "0.1.0"
 description = "基于LLM+工具函数的视频处理Agent"
-authors = [
-    {name = "Agent Developer", email = "dev@example.com"}
-]
+requires-python = ">=3.12"
 dependencies = [
-    "google-genai==0.3.2",
-    "opencv-python==4.8.1.78",
+    "google-generativeai>=0.3.2",
+    "opencv-python>=4.8.1.78", 
     "pillow>=10.1.0",
     "numpy>=1.24.3",
     "python-dotenv>=1.0.0",
     "pydantic>=2.5.0",
     "fastapi>=0.104.1",
 ]
-requires-python = ">=3.12"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 
 [tool.uv]
 dev-dependencies = [
     "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest-asyncio>=0.21.0", 
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]

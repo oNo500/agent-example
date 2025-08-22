@@ -3,7 +3,7 @@ import logging
 import asyncio
 from dataclasses import dataclass
 from core.llm_client import GeminiClient, FrameInfo, DetectionRegion
-from tools.registry import ToolRegistry
+from tools.registry import tool_registry
 from core.exceptions import VideoAgentException, ConfigurationError
 from config import Config
 
@@ -27,7 +27,7 @@ class VideoAgent:
         """
         self.config = Config()
         self.llm_client = GeminiClient(api_key)
-        self.tool_registry = ToolRegistry()
+        self.tool_registry = tool_registry  # 使用全局工具注册实例
         self.logger = self._setup_logger()
         
         # 注册默认工具
@@ -52,9 +52,13 @@ class VideoAgent:
     
     def _register_default_tools(self):
         """注册默认工具函数"""
-        # 这里将注册默认的视频处理工具
-        # 具体工具实现将在后续步骤中添加
-        pass
+        # 导入视频工具模块，触发工具注册
+        try:
+            from tools import video_tools
+            tool_count = len(self.tool_registry.list_tools())
+            self.logger.info(f"Registered {tool_count} video processing tools")
+        except ImportError as e:
+            self.logger.warning(f"Failed to import video tools: {e}")
     
     async def process_request(self, user_input: str, video_path: str) -> str:
         """处理用户请求的主流程
