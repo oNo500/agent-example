@@ -12,7 +12,8 @@ video_processor = VideoProcessor()
 def extract_video_frames(
     video_path: str,
     sample_rate: int = 30,
-    max_frames: int = 20
+    max_frames: int = 20,
+    use_motion_detection: bool = True
 ) -> str:
     """提取视频关键帧供LLM分析
     
@@ -20,13 +21,14 @@ def extract_video_frames(
         video_path: 视频文件的完整路径
         sample_rate: 采样率，每N帧提取一帧
         max_frames: 最大提取帧数，防止视频过长
+        use_motion_detection: 是否使用运动检测优化帧选择
         
     Returns:
         JSON字符串，包含提取的帧信息
         格式: {"frames": [{"frame_id": 1, "timestamp": 0.5, "image_path": "/tmp/frame_1.jpg"}]}
     """
     try:
-        frames = video_processor.extract_frames(video_path, sample_rate, max_frames)
+        frames = video_processor.extract_frames(video_path, sample_rate, max_frames, use_motion_detection)
         
         # 转换为JSON格式（使用Pydantic模型）
         frames_data = {
@@ -60,6 +62,14 @@ def mosaic_video_regions(
         VideoProcessingError: 视频处理失败时抛出
     """
     try:
+        # 验证输入参数
+        if not regions_data or regions_data.strip() == "":
+            return json.dumps({
+                "status": "skipped",
+                "message": "No regions data provided. Manual annotation required.",
+                "suggestion": "Use the annotation tool to mark phone locations in the extracted frames."
+            }, ensure_ascii=False)
+        
         # 解析区域数据
         regions_dict = json.loads(regions_data)
         
@@ -177,3 +187,78 @@ def list_supported_formats() -> str:
     }
     
     return json.dumps(supported_formats, ensure_ascii=False)
+
+
+@tool_registry.register
+def create_annotation_workflow(
+    video_path: str,
+    target_description: str = "手机",
+    sample_rate: int = 30,
+    max_frames: int = 20
+) -> str:
+    """创建完整的标注工作流，包含帧提取和标注界面生成
+    
+    Args:
+        video_path: 视频文件路径
+        target_description: 目标物体描述
+        sample_rate: 采样率
+        max_frames: 最大帧数
+        
+    Returns:
+        工作流结果JSON，包含标注界面路径和使用说明
+    """
+    try:
+        # 1. 提取关键帧
+        frames_info = extract_video_frames(
+            video_path=video_path,
+            sample_rate=sample_rate,
+            max_frames=max_frames,
+            use_motion_detection=True
+        )
+        
+        # 2. 创建标注会话
+        from tools.annotation_tools import create_annotation_session
+        session_info = create_annotation_session(
+            video_path=video_path,
+            frames_info=frames_info,
+            session_name=f"{target_description}_annotation"
+        )
+        
+        session_data = json.loads(session_info)
+        frames_data = json.loads(frames_info)
+        
+        # 3. 生成使用说明
+        browser_status = "🌐 浏览器已自动打开标注界面" if session_data.get("browser_opened") else "📁 请手动打开标注文件"
+        
+        result = {
+            "status": "workflow_created", 
+            "session_id": session_data["session_id"],
+            "annotation_file": session_data["annotation_file"],
+            "frames_extracted": len(frames_data["frames"]),
+            "target_description": target_description,
+            "browser_opened": session_data.get("browser_opened", False),
+            "message": f"""
+🎯 {target_description}标注工作流已创建！
+
+{browser_status}
+📊 已提取 {len(frames_data['frames'])} 个关键帧
+
+📋 操作步骤:
+  1. 在浏览器标注界面中拖拽选择{target_description}区域
+  2. 可以为每个关键帧标注多个区域
+  3. 完成后点击'保存标注数据'下载regions.json
+  4. 重新运行处理程序，系统会自动加载标注数据进行打码
+
+💡 下次处理提示: 完成标注后，重新输入相同的视频路径和需求即可自动应用打码
+            """.strip(),
+            "manual_next_steps": [
+                "完成浏览器中的手动标注",
+                "保存并下载regions.json文件", 
+                "重新运行程序进行打码处理"
+            ]
+        }
+        
+        return json.dumps(result, ensure_ascii=False, indent=2)
+        
+    except Exception as e:
+        raise VideoProcessingError(f"Annotation workflow creation failed: {str(e)}")

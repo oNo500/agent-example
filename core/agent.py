@@ -1,6 +1,7 @@
 from typing import Dict, List, Any, Optional
 import logging
 import asyncio
+import json
 from pydantic import BaseModel, Field
 from core.llm_client import GeminiClient, FrameInfo, DetectionRegion
 from tools.registry import tool_registry
@@ -52,13 +53,14 @@ class VideoAgent:
     
     def _register_default_tools(self):
         """注册默认工具函数"""
-        # 导入视频工具模块，触发工具注册
+        # 导入工具模块，触发工具注册
         try:
             from tools import video_tools
+            from tools import annotation_tools
             tool_count = len(self.tool_registry.list_tools())
-            self.logger.info(f"Registered {tool_count} video processing tools")
+            self.logger.info(f"Registered {tool_count} video processing and annotation tools")
         except ImportError as e:
-            self.logger.warning(f"Failed to import video tools: {e}")
+            self.logger.warning(f"Failed to import tools: {e}")
     
     async def process_request(self, user_input: str, video_path: str) -> str:
         """处理用户请求的主流程
@@ -81,18 +83,73 @@ class VideoAgent:
             video_info = await self._get_video_info(video_path)
             self.logger.info(f"Video info: {video_info}")
             
-            # 步骤2: 分解任务
-            available_tools = self.tool_registry.get_tool_descriptions()
-            task_steps = await self.llm_client.decompose_task(
-                user_input, available_tools, video_info
-            )
-            self.logger.info(f"Task decomposed into {len(task_steps)} steps")
+            # 检查是否是标注类任务（手机打码、物体遮挡等）
+            annotation_keywords = ["打码", "遮挡", "马赛克", "隐私", "标注", "手机", "人脸"]
+            is_annotation_task = any(keyword in user_input for keyword in annotation_keywords)
             
-            # 步骤3: 执行任务步骤
-            result = await self._execute_task_steps(task_steps, video_path, user_input)
+            if is_annotation_task:
+                # 对于标注类任务，直接创建标注工作流
+                self.logger.info("Detected annotation task, creating manual annotation workflow")
+                
+                # 提取目标描述
+                target_description = "手机"  # 默认
+                if "人脸" in user_input:
+                    target_description = "人脸"
+                elif "手机" in user_input:
+                    target_description = "手机"
+                
+                # 先检查是否已有标注数据
+                existing_sessions = self.tool_registry.execute_tool("list_annotation_sessions")
+                sessions_data = json.loads(existing_sessions)
+                
+                # 查找相同视频的标注会话
+                matching_session = None
+                for session in sessions_data.get("sessions", []):
+                    if session.get("video_path") == video_path:
+                        matching_session = session
+                        break
+                
+                if matching_session:
+                    # 尝试加载现有标注数据
+                    annotation_data = self.tool_registry.execute_tool(
+                        "load_annotation_data", 
+                        session_id=matching_session["session_id"]
+                    )
+                    annotation_result = json.loads(annotation_data)
+                    
+                    if annotation_result.get("status") != "no_annotation":
+                        # 有标注数据，直接执行打码
+                        self.logger.info("Found existing annotation data, applying mosaic")
+                        regions_data = json.dumps({"regions": annotation_result.get("regions", [])})
+                        output_path = self.tool_registry.execute_tool(
+                            "mosaic_video_regions",
+                            video_path=video_path,
+                            regions_data=regions_data,
+                            mosaic_strength=15
+                        )
+                        return f"✅ 打码处理完成！输出文件: {output_path}"
+                
+                # 没有现有标注数据，创建新的标注工作流
+                workflow_result = await self.create_manual_annotation_workflow(
+                    video_path, target_description
+                )
+                workflow_data = json.loads(workflow_result)
+                return workflow_data.get("message", "标注工作流已创建")
             
-            self.logger.info("Request processed successfully")
-            return result
+            else:
+                # 对于其他任务，使用原有的LLM分解流程
+                # 步骤2: 分解任务
+                available_tools = self.tool_registry.get_tool_descriptions()
+                task_steps = await self.llm_client.decompose_task(
+                    user_input, available_tools, video_info
+                )
+                self.logger.info(f"Task decomposed into {len(task_steps)} steps")
+                
+                # 步骤3: 执行任务步骤
+                result = await self._execute_task_steps(task_steps, video_path, user_input)
+                
+                self.logger.info("Request processed successfully")
+                return result
             
         except Exception as e:
             self.logger.error(f"Failed to process request: {str(e)}")
@@ -204,7 +261,8 @@ class VideoAgent:
             
             frames_info_str = self.tool_registry.execute_tool(
                 "extract_video_frames", 
-                video_path=video_path
+                video_path=video_path,
+                use_motion_detection=True
             )
             
             import json
@@ -227,3 +285,32 @@ class VideoAgent:
             
         except Exception as e:
             raise VideoAgentException(f"Video content analysis failed: {str(e)}") from e
+    
+    async def create_manual_annotation_workflow(
+        self, 
+        video_path: str, 
+        target_description: str = "手机"
+    ) -> str:
+        """创建手动标注工作流
+        
+        Args:
+            video_path: 视频路径
+            target_description: 目标描述
+            
+        Returns:
+            工作流信息和说明
+        """
+        try:
+            if not self.tool_registry.has_tool("create_annotation_workflow"):
+                raise VideoAgentException("create_annotation_workflow tool not available")
+            
+            workflow_result = self.tool_registry.execute_tool(
+                "create_annotation_workflow",
+                video_path=video_path,
+                target_description=target_description
+            )
+            
+            return workflow_result
+            
+        except Exception as e:
+            raise VideoAgentException(f"Manual annotation workflow creation failed: {str(e)}") from e

@@ -18,7 +18,8 @@ class VideoProcessor:
         self, 
         video_path: str, 
         sample_rate: int = None, 
-        max_frames: int = None
+        max_frames: int = None,
+        use_motion_detection: bool = True
     ) -> List[FrameInfo]:
         """提取视频关键帧
         
@@ -26,6 +27,7 @@ class VideoProcessor:
             video_path: 视频文件路径
             sample_rate: 采样率，每N帧提取一帧
             max_frames: 最大提取帧数
+            use_motion_detection: 是否使用运动检测优化帧选择
             
         Returns:
             帧信息列表
@@ -54,13 +56,31 @@ class VideoProcessor:
             temp_dir = os.path.join(self.config.TEMP_DIR, "frames")
             os.makedirs(temp_dir, exist_ok=True)
             
+            # 运动检测相关变量
+            prev_frame = None
+            motion_threshold = 1000  # 运动检测阈值
+            
             while cap.isOpened() and extracted_count < max_frames:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # 按采样率提取帧
+                # 智能帧提取：结合采样率和运动检测
+                should_extract = False
+                
+                # 基础采样率检查
                 if frame_count % sample_rate == 0:
+                    should_extract = True
+                    
+                    # 如果启用运动检测，进行额外验证
+                    if use_motion_detection and prev_frame is not None:
+                        motion_score = self._calculate_motion_score(prev_frame, frame)
+                        
+                        # 如果运动量太小，可能跳过这一帧（除非是第一帧）
+                        if motion_score < motion_threshold and extracted_count > 0:
+                            should_extract = False
+                
+                if should_extract:
                     timestamp = frame_count / fps
                     frame_filename = f"frame_{extracted_count + 1}.jpg"
                     frame_path = os.path.join(temp_dir, frame_filename)
@@ -77,6 +97,10 @@ class VideoProcessor:
                     )
                     frames.append(frame_info)
                     extracted_count += 1
+                    
+                    # 更新前一帧用于运动检测
+                    if use_motion_detection:
+                        prev_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 
                 frame_count += 1
             
@@ -246,3 +270,32 @@ class VideoProcessor:
             
         except Exception as e:
             raise VideoProcessingError(f"Failed to get video info: {str(e)}") from e
+    
+    def _calculate_motion_score(self, prev_frame: np.ndarray, current_frame: np.ndarray) -> float:
+        """计算两帧之间的运动得分
+        
+        Args:
+            prev_frame: 前一帧（灰度图）
+            current_frame: 当前帧（彩色图）
+            
+        Returns:
+            运动得分，数值越大表示运动越明显
+        """
+        try:
+            # 转换当前帧为灰度图
+            current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+            
+            # 计算帧差
+            frame_diff = cv2.absdiff(prev_frame, current_gray)
+            
+            # 应用阈值化
+            _, thresh = cv2.threshold(frame_diff, 30, 255, cv2.THRESH_BINARY)
+            
+            # 计算运动区域的像素数量作为运动得分
+            motion_pixels = cv2.countNonZero(thresh)
+            
+            return float(motion_pixels)
+            
+        except Exception as e:
+            # 如果运动检测失败，返回高分以确保帧被提取
+            return 10000.0

@@ -13,12 +13,12 @@ class Config(BaseSettings):
     
     # 视频处理配置
     max_video_duration: int = Field(default=300, description="最大视频时长（秒）")
-    default_sample_rate: int = Field(default=30, description="默认采样率")
-    max_frames_per_request: int = Field(default=20, description="每次请求最大帧数")
+    DEFAULT_SAMPLE_RATE: int = Field(default=30, description="默认采样率")
+    MAX_FRAMES_PER_REQUEST: int = Field(default=20, description="每次请求最大帧数")
     
     # 输出配置
-    output_dir: str = Field(default="output", description="输出目录")
-    temp_dir: str = Field(default="temp", description="临时目录")
+    OUTPUT_DIR: str = Field(default="output", description="输出目录")
+    TEMP_DIR: str = Field(default="temp", description="临时目录")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", description="日志级别"
     )
@@ -27,6 +27,9 @@ class Config(BaseSettings):
     max_memory_mb: int = Field(default=2048, description="最大内存使用（MB）")
     enable_gpu: bool = Field(default=True, description="是否启用GPU加速")
     concurrent_workers: int = Field(default=4, description="并发工作线程数")
+    
+    # 用户界面配置
+    auto_open_browser: bool = Field(default=True, description="是否自动打开浏览器标注界面")
     
     @field_validator("max_video_duration")
     @classmethod
@@ -45,8 +48,8 @@ class Config(BaseSettings):
     def model_post_init(self, __context) -> None:
         """初始化后处理"""
         # 确保必需的目录存在
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(self.temp_dir, exist_ok=True)
+        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.TEMP_DIR, exist_ok=True)
     
     class Config:
         env_file = ".env"
