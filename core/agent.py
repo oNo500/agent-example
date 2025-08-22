@@ -1,20 +1,20 @@
 from typing import Dict, List, Any, Optional
 import logging
 import asyncio
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 from core.llm_client import GeminiClient, FrameInfo, DetectionRegion
 from tools.registry import tool_registry
 from core.exceptions import VideoAgentException, ConfigurationError
 from config import Config
 
-@dataclass
-class ProcessingTask:
-    task_id: str
-    video_path: str
-    target_description: str
-    regions: List[DetectionRegion]
-    status: str
-    output_path: Optional[str] = None
+class ProcessingTask(BaseModel):
+    """处理任务模型"""
+    task_id: str = Field(..., description="任务ID")
+    video_path: str = Field(..., description="视频路径")
+    target_description: str = Field(..., description="目标描述")
+    regions: List[DetectionRegion] = Field(default_factory=list, description="检测区域列表")
+    status: str = Field(..., description="任务状态")
+    output_path: Optional[str] = Field(None, description="输出路径")
 
 class VideoAgent:
     """视频处理智能代理核心类"""
@@ -38,7 +38,7 @@ class VideoAgent:
     def _setup_logger(self) -> logging.Logger:
         """设置日志配置"""
         logger = logging.getLogger(__name__)
-        logger.setLevel(getattr(logging, self.config.LOG_LEVEL))
+        logger.setLevel(getattr(logging, self.config.log_level))
         
         if not logger.handlers:
             handler = logging.StreamHandler()

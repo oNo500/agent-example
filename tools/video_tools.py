@@ -28,18 +28,9 @@ def extract_video_frames(
     try:
         frames = video_processor.extract_frames(video_path, sample_rate, max_frames)
         
-        # 转换为JSON格式
+        # 转换为JSON格式（使用Pydantic模型）
         frames_data = {
-            "frames": [
-                {
-                    "frame_id": frame.frame_id,
-                    "timestamp": frame.timestamp,
-                    "image_path": frame.image_path,
-                    "width": frame.width,
-                    "height": frame.height
-                }
-                for frame in frames
-            ]
+            "frames": [frame.model_dump() for frame in frames]
         }
         
         return json.dumps(frames_data, ensure_ascii=False)

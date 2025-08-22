@@ -1,41 +1,44 @@
 from typing import List, Dict, Any, Optional
 import json
-import google.generativeai as genai
-from dataclasses import dataclass
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
 from core.exceptions import LLMAnalysisError, ConfigurationError
 from config import Config
 
-@dataclass
-class FrameInfo:
-    frame_id: int
-    timestamp: float
-    image_path: str
-    width: int
-    height: int
+class FrameInfo(BaseModel):
+    """视频帧信息模型"""
+    frame_id: int = Field(..., description="帧ID")
+    timestamp: float = Field(..., description="时间戳")
+    image_path: str = Field(..., description="图片路径")
+    width: int = Field(..., description="帧宽度")
+    height: int = Field(..., description="帧高度")
 
-@dataclass
-class DetectionRegion:
-    frame_id: int
-    object_type: str
-    bbox: tuple  # (x, y, width, height)
-    confidence: float
-    description: str
-    track_id: Optional[int] = None
+class DetectionRegion(BaseModel):
+    """检测区域模型"""
+    frame_id: int = Field(..., description="帧ID")
+    object_type: str = Field(..., description="对象类型")
+    bbox: tuple[int, int, int, int] = Field(..., description="边界框 (x, y, width, height)")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="置信度")
+    description: str = Field(..., description="描述")
+    track_id: Optional[int] = Field(None, description="跟踪ID")
 
 class GeminiClient:
     """Gemini LLM客户端封装"""
     
     def __init__(self, api_key: str = None):
         config = Config()
-        self.api_key = api_key or config.GEMINI_API_KEY
-        self.model_name = config.GEMINI_MODEL
+        self.api_key = api_key or config.gemini_api_key
+        self.model_name = config.gemini_model
         
         if not self.api_key:
             raise ConfigurationError("GEMINI_API_KEY is required")
         
-        # 配置Gemini
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(self.model_name)
+        # 配置Google Gen AI客户端
+        self.client = genai.Client(
+            api_key=self.api_key,
+            http_options=types.HttpOptions(api_version='v1beta')
+        )
     
     async def analyze_video_frames(
         self, 
@@ -56,19 +59,21 @@ class GeminiClient:
             prompt = self._build_analysis_prompt(target_description, frames)
             
             # 准备图片数据
-            images = []
+            contents = [prompt]
             for frame in frames:
                 try:
-                    with open(frame.image_path, 'rb') as f:
-                        images.append({
-                            'mime_type': 'image/jpeg',
-                            'data': f.read()
-                        })
+                    contents.append(types.File(
+                        file=frame.image_path,
+                        mime_type='image/jpeg'
+                    ))
                 except Exception as e:
                     raise LLMAnalysisError(f"Failed to load frame {frame.frame_id}: {str(e)}")
             
-            # 调用Gemini API
-            response = self.model.generate_content([prompt] + images)
+            # 调用Google Gen AI API
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=contents
+            )
             
             # 解析响应
             return self._parse_detection_response(response.text)
@@ -97,7 +102,10 @@ class GeminiClient:
                 user_request, available_tools, video_info
             )
             
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
             return self._parse_task_response(response.text)
             
         except Exception as e:

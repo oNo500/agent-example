@@ -8,6 +8,9 @@
 - **MVP 优先**: 核心功能先行，性能优化后续迭代
 - **模块化设计**: 便于添加新功能和维护
 - **工具注册系统**: 装饰器方式灵活注册处理工具
+- **现代化技术栈**: Google Gen AI SDK + Pydantic V2 + 最新依赖
+- **类型安全**: 完整的类型注解和 Pydantic 模型验证
+- **配置管理**: 使用 Pydantic Settings 进行环境配置
 
 ## 快速开始
 
@@ -31,12 +34,30 @@ uv sync
 
 ### 配置环境
 
-```bash
-# 复制配置文件
-cp .env.example .env
+创建 `.env` 文件并配置必要的环境变量：
 
-# 编辑.env文件，添加API密钥
+```bash
+# 创建配置文件
+cat > .env << EOF
+# LLM配置
 GEMINI_API_KEY=your_api_key_here
+GEMINI_MODEL=gemini-2.0-flash-exp
+
+# 视频处理配置
+MAX_VIDEO_DURATION=300
+DEFAULT_SAMPLE_RATE=30
+MAX_FRAMES_PER_REQUEST=20
+
+# 输出配置
+OUTPUT_DIR=output
+TEMP_DIR=temp
+LOG_LEVEL=INFO
+
+# 性能配置
+MAX_MEMORY_MB=2048
+ENABLE_GPU=true
+CONCURRENT_WORKERS=4
+EOF
 ```
 
 ### 使用方法
@@ -57,6 +78,7 @@ uv run python main.py --list-tools
 #### 编程方式
 
 ```python
+import asyncio
 from core.agent import VideoAgent
 from tools.video_tools import *  # 注册视频工具
 
@@ -70,6 +92,10 @@ async def example():
         "path/to/video.mp4"
     )
     print(result)
+
+# 运行示例
+if __name__ == "__main__":
+    asyncio.run(example())
 ```
 
 ## 核心功能
@@ -166,15 +192,30 @@ uv run python examples/demo.py
 
 ## 配置说明
 
-主要配置项 (config.py):
+使用 Pydantic Settings 进行配置管理，支持 `.env` 文件和环境变量：
 
-- `GEMINI_API_KEY`: Gemini API 密钥
-- `GEMINI_MODEL`: 使用的模型版本
-- `MAX_VIDEO_DURATION`: 最大支持视频时长(秒)
-- `DEFAULT_SAMPLE_RATE`: 默认帧采样率
-- `MAX_FRAMES_PER_REQUEST`: 单次 LLM 请求最大帧数
-- `OUTPUT_DIR`: 输出目录
-- `TEMP_DIR`: 临时文件目录
+### LLM 配置
+
+- `GEMINI_API_KEY`: Gemini API 密钥 (必需)
+- `GEMINI_MODEL`: 使用的模型版本 (默认: gemini-2.0-flash-exp)
+
+### 视频处理配置
+
+- `MAX_VIDEO_DURATION`: 最大支持视频时长(秒) (默认: 300)
+- `DEFAULT_SAMPLE_RATE`: 默认帧采样率 (默认: 30)
+- `MAX_FRAMES_PER_REQUEST`: 单次 LLM 请求最大帧数 (默认: 20)
+
+### 输出配置
+
+- `OUTPUT_DIR`: 输出目录 (默认: output)
+- `TEMP_DIR`: 临时文件目录 (默认: temp)
+- `LOG_LEVEL`: 日志级别 (DEBUG/INFO/WARNING/ERROR, 默认: INFO)
+
+### 性能配置
+
+- `MAX_MEMORY_MB`: 最大内存使用 (默认: 2048)
+- `ENABLE_GPU`: 是否启用 GPU 加速 (默认: true)
+- `CONCURRENT_WORKERS`: 并发工作线程数 (默认: 4)
 
 ## 测试
 
@@ -190,19 +231,44 @@ pytest tests/test_tools.py
 
 这是一个 **MVP 开发项目**，专注于核心功能实现，**不用于打包发布**。
 
-当前实现了:
+### v0.2.0 - 现代化升级 ✅
+
+✅ **Google Gen AI SDK**: 迁移到官方统一 SDK  
+✅ **Pydantic V2**: 完整的数据模型和验证  
+✅ **现代化依赖**: 所有依赖升级到最新版本  
+✅ **配置管理**: Pydantic Settings + 环境变量  
+✅ **类型安全**: 完整类型注解和验证  
+✅ **代码质量**: 统一代码风格和错误处理
+
+### v0.1.0 - 基础实现 ✅
 
 ✅ 核心架构和工具注册系统  
 ✅ 基础视频处理工具  
 ✅ LLM 客户端封装  
 ✅ 命令行和交互界面
 
-计划中的功能:
+### 计划中的功能
 
 - [ ] 更多视频处理效果
-- [ ] 性能优化和追踪  
+- [ ] 性能优化和追踪
 - [ ] Web API 接口
 - [ ] 插件系统
+- [ ] 单元测试覆盖
+
+## 技术栈
+
+### 核心依赖
+
+- **Google Gen AI SDK** (v0.3.0+): 官方统一的生成式 AI SDK
+- **Pydantic** (v2.9.0+): 数据验证和设置管理
+- **OpenCV** (v4.10.0+): 计算机视觉和视频处理
+- **FastAPI** (v0.115.0+): 现代 Python Web 框架 (用于未来 API)
+
+### 开发工具
+
+- **uv**: 现代 Python 包管理器
+- **pytest**: 测试框架
+- **python-dotenv**: 环境变量管理
 
 ## 使用注意
 
@@ -210,3 +276,4 @@ pytest tests/test_tools.py
 - 依赖通过 `pyproject.toml` 管理，使用 uv 工具
 - 所有运行命令都使用 `uv run` 前缀
 - 需要配置 Gemini API 密钥才能正常运行
+- 使用最新的 Google Gen AI SDK，确保 API 密钥有效

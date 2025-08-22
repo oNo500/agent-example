@@ -3,17 +3,18 @@
 
 [project]
 name = "video-agent-mvp"
-version = "0.1.0"
-description = "基于LLM+工具函数的视频处理Agent"
+version = "0.2.0"
+description = "基于LLM+工具函数的视频处理Agent - 现代化升级版"
 requires-python = ">=3.12"
 dependencies = [
-    "google-generativeai>=0.3.2",
-    "opencv-python>=4.8.1.78", 
-    "pillow>=10.1.0",
-    "numpy>=1.24.3",
+    "google-genai>=0.3.0",
+    "opencv-python>=4.10.0", 
+    "pillow>=11.0.0",
+    "numpy>=2.0.0",
     "python-dotenv>=1.0.0",
-    "pydantic>=2.5.0",
-    "fastapi>=0.104.1",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "fastapi>=0.115.0",
 ]
 
 [tool.uv]
